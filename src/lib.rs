@@ -52,11 +52,19 @@
 
 #![allow(non_snake_case)]
 
+pub mod agent;
 pub mod aggregator;
+pub mod bootstrap;
 pub mod cache;
+pub mod cli;
+pub mod config;
 pub mod dht;
 pub mod health_check;
+pub mod history;
 pub mod pex;
+pub mod protocol;
+pub mod server;
+pub mod service_resolver;
 pub mod tracker;
 pub mod traits;
 pub mod types;
