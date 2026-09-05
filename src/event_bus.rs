@@ -78,7 +78,7 @@ impl Default for EventBus {
 /// let bus_clone = bus.clone();
 /// tokio::spawn(async move {
 ///     spawn_consumer(bus_clone, |event| {
-///         println!("收到事件: {:?}", event);
+///         info!("收到事件: {:?}", event);
 ///         true
 ///     }).await;
 /// });
@@ -115,7 +115,7 @@ where
 ///
 /// spawn_filtered_consumer(bus, |event| matches!(event, Event::PeerDiscovered { .. }), |event| {
 ///     if let Event::PeerDiscovered { infohash, peers, .. } = event {
-///         println!("发现 {} 个 peer", peers.len());
+///         info!("发现 {} 个 peer", peers.len());
 ///     }
 ///     true
 /// }).await;
