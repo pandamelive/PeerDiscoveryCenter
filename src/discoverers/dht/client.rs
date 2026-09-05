@@ -28,7 +28,7 @@ use crate::traits::{AnnounceEvent, DiscovererStats, DiscovererType, PeerDiscover
 use crate::types::{Infohash, PeerInfo, PeerSource};
 
 use super::message::{DhtMessage, DhtNode};
-use super::routing_table::{CompactAddr, RoutingTable, verify_node_id};
+use super::routing_table::{verify_node_id, CompactAddr, RoutingTable};
 use super::store::DhtStore;
 use super::token::TokenManager;
 
@@ -510,13 +510,8 @@ impl PeerDiscoverer for DhtDiscoverer {
             if let Ok(Some((node_addr, token))) = task.await {
                 // 发送 announce_peer（fire and forget）
                 let tid = rand::thread_rng().gen::<[u8; 2]>();
-                let announce_msg = DhtMessage::build_announce_peer(
-                    &tid,
-                    &self.node_id,
-                    infohash,
-                    port,
-                    &token,
-                );
+                let announce_msg =
+                    DhtMessage::build_announce_peer(&tid, &self.node_id, infohash, port, &token);
                 if socket.send_to(&announce_msg, node_addr).await.is_ok() {
                     announced_count += 1;
                     debug!("[dht] 向 {} announce_peer 成功", node_addr);
@@ -549,8 +544,8 @@ impl PeerDiscoverer for DhtDiscoverer {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::routing_table::generate_node_id;
+    use super::*;
 
     #[test]
     fn test_dht_config_default() {
@@ -574,7 +569,7 @@ mod tests {
         let result = discoverer.init().await;
         assert!(result.is_ok());
         assert!(*discoverer.initialized.read());
-        assert!(discoverer.routing_table.read().len() > 0);
+        assert!(!discoverer.routing_table.read().is_empty());
     }
 
     #[test]

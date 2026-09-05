@@ -188,12 +188,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_discover_peers() {
-        let mut config = WebSeedConfig::default();
-        config.enabled = true;
-        config.urls = vec![
-            "http://example.com/file1".to_string(),
-            "http://example.com/file2".to_string(),
-        ];
+        let config = WebSeedConfig {
+            enabled: true,
+            urls: vec![
+                "http://example.com/file1".to_string(),
+                "http://example.com/file2".to_string(),
+            ],
+            ..Default::default()
+        };
         let discoverer = WebSeedDiscoverer::new(config);
 
         let infohash = [0u8; 20];
@@ -209,13 +211,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_discover_peers_with_limit() {
-        let mut config = WebSeedConfig::default();
-        config.enabled = true;
-        config.urls = vec![
-            "http://example.com/1".to_string(),
-            "http://example.com/2".to_string(),
-            "http://example.com/3".to_string(),
-        ];
+        let config = WebSeedConfig {
+            enabled: true,
+            urls: vec![
+                "http://example.com/1".to_string(),
+                "http://example.com/2".to_string(),
+                "http://example.com/3".to_string(),
+            ],
+            ..Default::default()
+        };
         let discoverer = WebSeedDiscoverer::new(config);
 
         let infohash = [0u8; 20];
@@ -236,9 +240,11 @@ mod tests {
 
     #[test]
     fn test_infohash_specific_urls() {
-        let mut config = WebSeedConfig::default();
-        config.enabled = true;
-        config.urls = vec!["http://global.com".to_string()];
+        let mut config = WebSeedConfig {
+            enabled: true,
+            urls: vec!["http://global.com".to_string()],
+            ..Default::default()
+        };
         let infohash = [1u8; 20];
         config
             .infohash_urls

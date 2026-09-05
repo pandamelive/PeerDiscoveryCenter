@@ -220,19 +220,19 @@ fn parse_config_path() -> Option<String> {
                 }
             }
             "--help" | "-h" => {
-                println!("PeerDiscoveryCenter v{}", PeerDiscoveryCenter::VERSION);
-                println!();
-                println!("用法:");
-                println!("  pdc [OPTIONS]");
-                println!();
-                println!("选项:");
-                println!("  -c, --config <FILE>  指定配置文件路径");
-                println!("  -h, --help           显示帮助信息");
-                println!();
-                println!("默认配置:");
-                println!("  监听: 0.0.0.0:6880");
-                println!("  超级 Tracker: 启用");
-                println!("  发现器: tracker + dht + pex");
+                println!("PeerDiscoveryCenter v{}", PeerDiscoveryCenter::VERSION); // panda-allow: cli-help-output
+                println!(); // panda-allow: cli-help-output
+                println!("用法:"); // panda-allow: cli-help-output
+                println!("  pdc [OPTIONS]"); // panda-allow: cli-help-output
+                println!(); // panda-allow: cli-help-output
+                println!("选项:"); // panda-allow: cli-help-output
+                println!("  -c, --config <FILE>  指定配置文件路径"); // panda-allow: cli-help-output
+                println!("  -h, --help           显示帮助信息"); // panda-allow: cli-help-output
+                println!(); // panda-allow: cli-help-output
+                println!("默认配置:"); // panda-allow: cli-help-output
+                println!("  监听: 0.0.0.0:6880"); // panda-allow: cli-help-output
+                println!("  超级 Tracker: 启用"); // panda-allow: cli-help-output
+                println!("  发现器: tracker + dht + pex"); // panda-allow: cli-help-output
                 std::process::exit(0);
             }
             _ => {}

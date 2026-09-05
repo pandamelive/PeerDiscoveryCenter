@@ -18,7 +18,7 @@ pub mod token;
 
 pub use client::{DhtConfig, DhtDiscoverer};
 pub use global_store::{GlobalNodeStore, MultiNodeManager};
-pub use routing_table::{CompactAddr, RoutingTable, generate_node_id, verify_node_id};
+pub use routing_table::{generate_node_id, verify_node_id, CompactAddr, RoutingTable};
 
 use std::io;
 use tokio::net::UdpSocket;

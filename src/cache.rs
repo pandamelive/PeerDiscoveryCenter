@@ -120,7 +120,7 @@ impl PeerCache {
         }
 
         // 按 last_active 升序（最久未活跃的在前）
-        all_peers.sort_by(|a, b| a.0.cmp(&b.0));
+        all_peers.sort_by_key(|a| a.0);
 
         // 淘汰多余的
         let to_evict = total - self.max_peers;

@@ -8,12 +8,12 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::discoverers::dht::routing_table::{CompactAddr, RoutingTable};
 use crate::discoverers::dht::store::DhtStore;
@@ -70,7 +70,7 @@ impl DhtPersistence {
         if !self.config.enabled {
             return false;
         }
-        let mut last = self.last_save.lock().unwrap();
+        let last = self.last_save.lock().unwrap();
         match *last {
             Some(t) => t.elapsed() >= Duration::from_secs(self.config.interval),
             None => true,
@@ -90,10 +90,10 @@ impl DhtPersistence {
 
         // 导出路由表节点
         for node in routing_table.all_nodes() {
-            let id_hex = hex::encode(&node.id);
+            let id_hex = hex::encode(node.id);
             let addr_str = match node.addr {
-                CompactAddr::V4(buf) => format!("v4:{}", hex::encode(&buf)),
-                CompactAddr::V6(buf) => format!("v6:{}", hex::encode(&buf)),
+                CompactAddr::V4(buf) => format!("v4:{}", hex::encode(buf)),
+                CompactAddr::V6(buf) => format!("v6:{}", hex::encode(buf)),
             };
             state.routing_nodes.insert(id_hex, addr_str);
         }
@@ -101,7 +101,7 @@ impl DhtPersistence {
         // 导出 peer 存储
         for infohash in peer_store.all_infohashes() {
             let peers = peer_store.get_peers(&infohash, 256);
-            let ih_hex = hex::encode(&infohash);
+            let ih_hex = hex::encode(infohash);
             let peer_strs: Vec<String> = peers
                 .iter()
                 .map(|p| {
@@ -245,7 +245,6 @@ fn current_timestamp() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
     fn test_config() -> PersistenceConfig {
         PersistenceConfig {

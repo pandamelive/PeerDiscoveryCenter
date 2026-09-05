@@ -32,14 +32,15 @@ impl BloomFilter {
     pub fn new(expected_items: usize, false_positive_rate: f64) -> Self {
         // 计算最优位数组大小：m = -n*ln(p) / (ln(2))^2
         let ln2 = std::f64::consts::LN_2;
-        let num_bits = (-(expected_items as f64) * false_positive_rate.ln() / (ln2 * ln2)).ceil() as usize;
+        let num_bits =
+            (-(expected_items as f64) * false_positive_rate.ln() / (ln2 * ln2)).ceil() as usize;
         let num_bits = num_bits.max(64); // 至少 64 位
 
         // 计算最优哈希函数数量：k = (m/n) * ln(2)
         let num_hashes = ((num_bits as f64 / expected_items as f64) * ln2).round() as usize;
-        let num_hashes = num_hashes.max(2).min(20); // 2-20 个哈希函数
+        let num_hashes = num_hashes.clamp(2, 20); // 2-20 个哈希函数
 
-        let num_words = (num_bits + 63) / 64;
+        let num_words = num_bits.div_ceil(64);
         BloomFilter {
             bits: vec![0u64; num_words],
             num_bits,
@@ -131,9 +132,7 @@ impl BloomFilter {
 
     /// 清空
     pub fn clear(&mut self) {
-        for word in &mut self.bits {
-            *word = 0;
-        }
+        self.bits.fill(0);
         self.count = 0;
     }
 

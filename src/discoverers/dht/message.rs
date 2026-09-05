@@ -444,10 +444,7 @@ impl DhtMessage {
     }
 
     /// 构建 announce_peer 响应
-    pub fn build_announce_peer_response(
-        transaction_id: &[u8],
-        node_id: &[u8; 20],
-    ) -> Vec<u8> {
+    pub fn build_announce_peer_response(transaction_id: &[u8], node_id: &[u8; 20]) -> Vec<u8> {
         let mut buf = Vec::new();
         buf.extend_from_slice(b"d1:rd2:id20:");
         buf.extend_from_slice(node_id);
@@ -459,11 +456,7 @@ impl DhtMessage {
     }
 
     /// 构建 DHT 错误响应
-    pub fn build_error_response(
-        transaction_id: &[u8],
-        code: i64,
-        message: &str,
-    ) -> Vec<u8> {
+    pub fn build_error_response(transaction_id: &[u8], code: i64, message: &str) -> Vec<u8> {
         let mut buf = Vec::new();
         buf.extend_from_slice(b"d1:eli");
         buf.extend_from_slice(code.to_string().as_bytes());
@@ -577,7 +570,8 @@ impl DhtMessage {
         let samples = r
             .get(b"samples".as_slice())
             .and_then(|v| v.as_bytes())
-            .map(|b| b.to_vec()).unwrap_or_default()
+            .map(|b| b.to_vec())
+            .unwrap_or_default()
             .to_vec();
 
         Some((transaction_id, interval, num, samples))

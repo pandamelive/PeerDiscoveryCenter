@@ -170,7 +170,10 @@ async fn metrics_handler() -> impl axum::response::IntoResponse {
     let body = crate::metrics::gather();
     (
         axum::http::StatusCode::OK,
-        [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4",
+        )],
         body,
     )
 }

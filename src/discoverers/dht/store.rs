@@ -6,10 +6,10 @@
 //! - 支持插入、查询、过期清理
 //! - 内存优化：CompactAddr（6B/18B）+ u32 时间戳
 
+use super::routing_table::CompactAddr;
+use crate::types::Infohash;
 use std::collections::HashMap;
 use std::time::Instant;
-use crate::types::Infohash;
-use super::routing_table::CompactAddr;
 
 /// Peer 条目 TTL（秒）— DHT announce 标准有效期 30 分钟
 pub const PEER_TTL_SECS: u32 = 1800;

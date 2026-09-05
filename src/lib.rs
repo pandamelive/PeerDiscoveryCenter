@@ -73,9 +73,9 @@ pub mod discoverers;
 pub mod event_bus;
 pub mod health_check;
 pub mod metrics;
-pub mod persistence;
 pub mod nat;
 pub mod peer_filter;
+pub mod persistence;
 pub mod traits;
 pub mod types;
 

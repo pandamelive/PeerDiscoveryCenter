@@ -16,7 +16,7 @@ use std::time::Instant;
 use parking_lot::RwLock;
 use rand::Rng;
 
-use super::routing_table::{CompactAddr, distance_less, xor_distance};
+use super::routing_table::{distance_less, xor_distance, CompactAddr};
 
 /// 全局节点池中的节点条目
 #[derive(Debug, Clone)]
@@ -126,11 +126,8 @@ impl GlobalNodeStore {
 
     /// 查找距离目标最近的 N 个健康节点
     pub fn find_closest(&self, target: &[u8; 20], count: usize) -> Vec<GlobalNodeEntry> {
-        let mut all: Vec<&GlobalNodeEntry> = self
-            .nodes
-            .values()
-            .filter(|n| n.is_healthy())
-            .collect();
+        let mut all: Vec<&GlobalNodeEntry> =
+            self.nodes.values().filter(|n| n.is_healthy()).collect();
 
         all.sort_by(|a, b| {
             let da = xor_distance(&a.id, target);
@@ -147,7 +144,11 @@ impl GlobalNodeStore {
 
     /// 获取所有健康节点
     pub fn healthy_nodes(&self) -> Vec<GlobalNodeEntry> {
-        self.nodes.values().filter(|n| n.is_healthy()).cloned().collect()
+        self.nodes
+            .values()
+            .filter(|n| n.is_healthy())
+            .cloned()
+            .collect()
     }
 
     /// 获取所有节点

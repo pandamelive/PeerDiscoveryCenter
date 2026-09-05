@@ -19,9 +19,7 @@ use tracing::{debug, info, warn};
 
 use crate::bloom::BloomFilter;
 use crate::config::CrawlerConfig;
-use crate::discoverers::dht::message::{
-    DhtMessage, DhtNode, QueryMethod,
-};
+use crate::discoverers::dht::message::{DhtMessage, DhtNode, QueryMethod};
 use crate::discoverers::dht::routing_table::{CompactAddr, RoutingTable};
 use crate::discoverers::dht::store::DhtStore;
 use crate::discoverers::dht::token::TokenManager;
@@ -210,7 +208,11 @@ impl CrawlerEngine {
                     DhtMessage::build_find_node_response_with_nodes(&tid, &self.node_id, &nodes)
                 };
                 let _ = socket.send_to(&resp, from).await;
-                debug!("[crawler] 响应 {} 的 find_node（返回 {} 节点）", from, nodes.len());
+                debug!(
+                    "[crawler] 响应 {} 的 find_node（返回 {} 节点）",
+                    from,
+                    nodes.len()
+                );
             }
             QueryMethod::GetPeers => {
                 let ih = infohash?;
@@ -225,7 +227,11 @@ impl CrawlerEngine {
                 let resp = if !peers.is_empty() {
                     // 有存储的 peer，直接返回
                     DhtMessage::build_get_peers_response_full(
-                        &tid, &self.node_id, &token, &peers, &[],
+                        &tid,
+                        &self.node_id,
+                        &token,
+                        &peers,
+                        &[],
                     )
                 } else {
                     // 没有存储的 peer，返回最近的节点
@@ -238,7 +244,11 @@ impl CrawlerEngine {
                         })
                         .collect();
                     DhtMessage::build_get_peers_response_full(
-                        &tid, &self.node_id, &token, &[], &nodes,
+                        &tid,
+                        &self.node_id,
+                        &token,
+                        &[],
+                        &nodes,
                     )
                 };
                 let _ = socket.send_to(&resp, from).await;
@@ -254,13 +264,13 @@ impl CrawlerEngine {
                 // 解析 announce_peer 参数
                 if let Some((tid, params)) = DhtMessage::parse_announce_peer(data) {
                     // 验证 token
-                    let token_valid = self.token_manager.read().verify(&from_compact, &params.token);
+                    let token_valid = self
+                        .token_manager
+                        .read()
+                        .verify(&from_compact, &params.token);
 
                     if !token_valid {
-                        debug!(
-                            "[crawler] {} 的 announce_peer token 验证失败，忽略",
-                            from
-                        );
+                        debug!("[crawler] {} 的 announce_peer token 验证失败，忽略", from);
                         // 仍然响应（但不存储）
                         let resp = DhtMessage::build_announce_peer_response(&tid, &self.node_id);
                         let _ = socket.send_to(&resp, from).await;
@@ -282,9 +292,7 @@ impl CrawlerEngine {
                         .announce(params.info_hash, peer_compact);
 
                     // 将请求方加入路由表
-                    self.routing_table
-                        .write()
-                        .insert(params.id, from_compact);
+                    self.routing_table.write().insert(params.id, from_compact);
 
                     // 更新统计
                     {
@@ -339,7 +347,12 @@ impl CrawlerEngine {
         );
 
         // 创建 UDP socket
-        let socket = match crate::discoverers::dht::bind_udp_socket(&format!("0.0.0.0:{}", self.config.listen_port)).await {
+        let socket = match crate::discoverers::dht::bind_udp_socket(&format!(
+            "0.0.0.0:{}",
+            self.config.listen_port
+        ))
+        .await
+        {
             Ok(s) => s,
             Err(e) => {
                 warn!("[crawler] 绑定端口 {} 失败: {}", self.config.listen_port, e);

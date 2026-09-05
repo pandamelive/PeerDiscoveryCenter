@@ -13,9 +13,9 @@
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
+use super::routing_table::CompactAddr;
 use rand::Rng;
 use sha1::{Digest, Sha1};
-use super::routing_table::CompactAddr;
 
 /// Token 长度（字节）
 pub const TOKEN_LEN: usize = 8;

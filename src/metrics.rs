@@ -2,10 +2,8 @@
 //!
 //! 暴露 PDC 运行时指标，供 Prometheus 抓取。
 
+use prometheus::{Encoder, IntCounter, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder};
 use std::sync::OnceLock;
-use prometheus::{
-    Encoder, IntCounter, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder,
-};
 
 static REGISTRY: OnceLock<Registry> = OnceLock::new();
 
@@ -27,35 +25,73 @@ fn register_counter(name: &str, help: &str) -> IntCounter {
 
 // Gauges
 static DHT_NODES_G: OnceLock<IntGauge> = OnceLock::new();
-pub fn dht_nodes() -> &'static IntGauge { DHT_NODES_G.get_or_init(|| register_gauge("pdc_dht_nodes_total", "DHT 路由表节点总数")) }
+pub fn dht_nodes() -> &'static IntGauge {
+    DHT_NODES_G.get_or_init(|| register_gauge("pdc_dht_nodes_total", "DHT 路由表节点总数"))
+}
 
 static DHT_INFOHASHES_G: OnceLock<IntGauge> = OnceLock::new();
-pub fn dht_infohashes() -> &'static IntGauge { DHT_INFOHASHES_G.get_or_init(|| register_gauge("pdc_dht_infohashes_total", "DHT 存储的 infohash 总数")) }
+pub fn dht_infohashes() -> &'static IntGauge {
+    DHT_INFOHASHES_G
+        .get_or_init(|| register_gauge("pdc_dht_infohashes_total", "DHT 存储的 infohash 总数"))
+}
 
 static DHT_PEERS_G: OnceLock<IntGauge> = OnceLock::new();
-pub fn dht_peers() -> &'static IntGauge { DHT_PEERS_G.get_or_init(|| register_gauge("pdc_dht_peers_total", "DHT 存储的 peer 总数")) }
+pub fn dht_peers() -> &'static IntGauge {
+    DHT_PEERS_G.get_or_init(|| register_gauge("pdc_dht_peers_total", "DHT 存储的 peer 总数"))
+}
 
 static TRACKER_PEERS_G: OnceLock<IntGauge> = OnceLock::new();
-pub fn tracker_peers() -> &'static IntGauge { TRACKER_PEERS_G.get_or_init(|| register_gauge("pdc_tracker_peers_total", "超级 Tracker 存储的 peer 总数")) }
+pub fn tracker_peers() -> &'static IntGauge {
+    TRACKER_PEERS_G
+        .get_or_init(|| register_gauge("pdc_tracker_peers_total", "超级 Tracker 存储的 peer 总数"))
+}
 
 static TRACKER_INFOHASHES_G: OnceLock<IntGauge> = OnceLock::new();
-pub fn tracker_infohashes() -> &'static IntGauge { TRACKER_INFOHASHES_G.get_or_init(|| register_gauge("pdc_tracker_infohashes_total", "超级 Tracker 存储的 infohash 总数")) }
+pub fn tracker_infohashes() -> &'static IntGauge {
+    TRACKER_INFOHASHES_G.get_or_init(|| {
+        register_gauge(
+            "pdc_tracker_infohashes_total",
+            "超级 Tracker 存储的 infohash 总数",
+        )
+    })
+}
 
 static CACHE_PEERS_G: OnceLock<IntGauge> = OnceLock::new();
-pub fn cache_peers() -> &'static IntGauge { CACHE_PEERS_G.get_or_init(|| register_gauge("pdc_cache_peers_total", "Peer 缓存总数")) }
+pub fn cache_peers() -> &'static IntGauge {
+    CACHE_PEERS_G.get_or_init(|| register_gauge("pdc_cache_peers_total", "Peer 缓存总数"))
+}
 
 static CACHE_INFOHASHES_G: OnceLock<IntGauge> = OnceLock::new();
-pub fn cache_infohashes() -> &'static IntGauge { CACHE_INFOHASHES_G.get_or_init(|| register_gauge("pdc_cache_infohashes_total", "Peer 缓存 infohash 数")) }
+pub fn cache_infohashes() -> &'static IntGauge {
+    CACHE_INFOHASHES_G
+        .get_or_init(|| register_gauge("pdc_cache_infohashes_total", "Peer 缓存 infohash 数"))
+}
 
 static BANNED_PEERS_G: OnceLock<IntGauge> = OnceLock::new();
-pub fn banned_peers() -> &'static IntGauge { BANNED_PEERS_G.get_or_init(|| register_gauge("pdc_banned_peers_total", "当前封禁的 peer 数")) }
+pub fn banned_peers() -> &'static IntGauge {
+    BANNED_PEERS_G.get_or_init(|| register_gauge("pdc_banned_peers_total", "当前封禁的 peer 数"))
+}
 
 // Counters
 static CRAWLER_INFOHASHES_C: OnceLock<IntCounter> = OnceLock::new();
-pub fn crawler_infohashes() -> &'static IntCounter { CRAWLER_INFOHASHES_C.get_or_init(|| register_counter("pdc_crawler_infohashes_collected_total", "爬虫收集的 infohash 累计数")) }
+pub fn crawler_infohashes() -> &'static IntCounter {
+    CRAWLER_INFOHASHES_C.get_or_init(|| {
+        register_counter(
+            "pdc_crawler_infohashes_collected_total",
+            "爬虫收集的 infohash 累计数",
+        )
+    })
+}
 
 static CRAWLER_PEERS_C: OnceLock<IntCounter> = OnceLock::new();
-pub fn crawler_peers() -> &'static IntCounter { CRAWLER_PEERS_C.get_or_init(|| register_counter("pdc_crawler_peers_collected_total", "爬虫收集的 peer 累计数")) }
+pub fn crawler_peers() -> &'static IntCounter {
+    CRAWLER_PEERS_C.get_or_init(|| {
+        register_counter(
+            "pdc_crawler_peers_collected_total",
+            "爬虫收集的 peer 累计数",
+        )
+    })
+}
 
 // GaugeVec
 static HTTP_REQUESTS_GV: OnceLock<IntGaugeVec> = OnceLock::new();
@@ -106,7 +142,9 @@ mod tests {
 
     #[test]
     fn test_http_requests_labels() {
-        http_requests().with_label_values(&["/announce", "200"]).inc();
+        http_requests()
+            .with_label_values(&["/announce", "200"])
+            .inc();
         http_requests().with_label_values(&["/scrape", "200"]).inc();
 
         let output = gather();

@@ -112,10 +112,12 @@ impl AuthState {
         let window = Duration::from_secs(config.rate_limit_window_secs);
 
         let mut limits = self.rate_limits.write();
-        let state = limits.entry(client_id.to_string()).or_insert(RateLimitState {
-            window_start: Instant::now(),
-            count: 0,
-        });
+        let state = limits
+            .entry(client_id.to_string())
+            .or_insert(RateLimitState {
+                window_start: Instant::now(),
+                count: 0,
+            });
 
         // 重置窗口
         if state.window_start.elapsed() > window {
@@ -150,7 +152,10 @@ pub async fn auth_middleware(
 
     // 1. API Key 认证
     if !state.validate_api_key(&headers) {
-        warn!("[auth] API Key 验证失败: client={}, path={}", client_id, path);
+        warn!(
+            "[auth] API Key 验证失败: client={}, path={}",
+            client_id, path
+        );
         return Err(StatusCode::UNAUTHORIZED);
     }
 
@@ -163,7 +168,10 @@ pub async fn auth_middleware(
     // 3. 审计日志（请求前）
     let audit_enabled = state.config.read().audit_log_enabled;
     if audit_enabled {
-        info!("[audit] 请求: method={}, path={}, client={}", method, path, client_id);
+        info!(
+            "[audit] 请求: method={}, path={}, client={}",
+            method, path, client_id
+        );
     }
 
     // 4. 执行请求

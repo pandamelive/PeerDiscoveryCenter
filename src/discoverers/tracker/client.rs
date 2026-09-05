@@ -233,10 +233,7 @@ impl TrackerDiscoverer {
     /// 向 Tracker 发送 scrape 请求，获取 seeders/leechers 统计
     ///
     /// 返回 (infohash -> (complete, downloaded, incomplete))
-    pub async fn scrape(
-        &self,
-        infohashes: &[Infohash],
-    ) -> HashMap<Infohash, (i64, i64, i64)> {
+    pub async fn scrape(&self, infohashes: &[Infohash]) -> HashMap<Infohash, (i64, i64, i64)> {
         self.recover_cooldown_trackers();
         let active_trackers = self.active_trackers();
         if active_trackers.is_empty() || infohashes.is_empty() {
@@ -287,9 +284,7 @@ impl TrackerDiscoverer {
     }
 
     /// 解析 scrape 响应
-    fn parse_scrape_response(
-        body: &[u8],
-    ) -> Result<HashMap<Infohash, (i64, i64, i64)>> {
+    fn parse_scrape_response(body: &[u8]) -> Result<HashMap<Infohash, (i64, i64, i64)>> {
         use serde_bencode::from_bytes;
         use serde_bencode::value::Value as BencodeValue;
 

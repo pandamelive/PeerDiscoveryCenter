@@ -127,7 +127,8 @@ impl PeerFilter {
         }
 
         // 重置时间窗口
-        if now.duration_since(behavior.window_start) > Duration::from_secs(self.config.window_secs) {
+        if now.duration_since(behavior.window_start) > Duration::from_secs(self.config.window_secs)
+        {
             behavior.window_start = now;
             behavior.request_count = 0;
             behavior.unique_infohashes = 0;
@@ -137,7 +138,10 @@ impl PeerFilter {
         behavior.last_request = now;
 
         // 检查频率
-        let elapsed = now.duration_since(behavior.window_start).as_secs_f64().max(1.0);
+        let elapsed = now
+            .duration_since(behavior.window_start)
+            .as_secs_f64()
+            .max(1.0);
         let rate = behavior.request_count as f64 / elapsed;
         if rate > self.config.max_requests_per_second as f64 {
             self.ban(ip, behavior);
@@ -170,7 +174,8 @@ impl PeerFilter {
         let behavior = behaviors.entry(*ip).or_insert_with(PeerBehavior::new);
 
         // 重置窗口
-        if now.duration_since(behavior.window_start) > Duration::from_secs(self.config.window_secs) {
+        if now.duration_since(behavior.window_start) > Duration::from_secs(self.config.window_secs)
+        {
             behavior.window_start = now;
             behavior.request_count = 0;
             behavior.unique_infohashes = 0;
