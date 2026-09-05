@@ -12,6 +12,10 @@
 //! pdc --config config.yaml  # 使用指定配置文件
 //! ```
 
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
+
 use std::sync::Arc;
 
 use parking_lot::RwLock;

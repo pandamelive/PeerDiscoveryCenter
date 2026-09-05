@@ -62,6 +62,8 @@
 #![allow(non_snake_case)]
 
 pub mod aggregator;
+pub mod auth;
+pub mod bloom;
 pub mod cache;
 pub mod config;
 pub mod control_plane;
@@ -70,7 +72,10 @@ pub mod data_plane;
 pub mod discoverers;
 pub mod event_bus;
 pub mod health_check;
+pub mod metrics;
+pub mod persistence;
 pub mod nat;
+pub mod peer_filter;
 pub mod traits;
 pub mod types;
 

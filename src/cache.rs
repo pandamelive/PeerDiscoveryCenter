@@ -97,6 +97,41 @@ impl PeerCache {
                 entry.remove(&addr);
             }
         }
+        drop(entry);
+
+        // 全局 LRU 淘汰：超过上限时移除最久未活跃的 peer
+        self.evict_global_lru();
+    }
+
+    /// 全局 LRU 淘汰：超过上限时移除最久未活跃的 peer
+    fn evict_global_lru(&self) {
+        let total: usize = self.peers.iter().map(|m| m.value().len()).sum();
+        if total <= self.max_peers {
+            return;
+        }
+
+        // 收集所有 peer 的 (last_active, infohash, addr)
+        let mut all_peers: Vec<(SystemTime, Infohash, SocketAddr)> = Vec::new();
+        for entry in self.peers.iter() {
+            let ih = *entry.key();
+            for peer in entry.value().values() {
+                all_peers.push((peer.last_active, ih, peer.addr));
+            }
+        }
+
+        // 按 last_active 升序（最久未活跃的在前）
+        all_peers.sort_by(|a, b| a.0.cmp(&b.0));
+
+        // 淘汰多余的
+        let to_evict = total - self.max_peers;
+        for (_, ih, addr) in all_peers.iter().take(to_evict) {
+            if let Some(mut entry) = self.peers.get_mut(ih) {
+                entry.remove(addr);
+            }
+        }
+
+        // 清理空的 infohash 条目
+        self.peers.retain(|_, entry| !entry.is_empty());
     }
 
     /// 标记 peer 连接成功

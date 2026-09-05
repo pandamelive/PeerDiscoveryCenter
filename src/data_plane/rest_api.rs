@@ -161,7 +161,18 @@ pub fn routes(state: AppState) -> Router {
         .route("/api/v1/cache/{infohash}", get(cache_query_handler))
         .route("/api/v1/peer-feedback", post(peer_feedback_handler))
         .route("/api/v1/nat/status", get(nat_status_handler))
+        .route("/metrics", get(metrics_handler))
         .with_state(state)
+}
+
+/// Prometheus 指标处理函数
+async fn metrics_handler() -> impl axum::response::IntoResponse {
+    let body = crate::metrics::gather();
+    (
+        axum::http::StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        body,
+    )
 }
 
 // ---------------------------------------------------------------------------

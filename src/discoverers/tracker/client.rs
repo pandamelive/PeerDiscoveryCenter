@@ -229,6 +229,120 @@ impl TrackerDiscoverer {
             }
         }
     }
+
+    /// 向 Tracker 发送 scrape 请求，获取 seeders/leechers 统计
+    ///
+    /// 返回 (infohash -> (complete, downloaded, incomplete))
+    pub async fn scrape(
+        &self,
+        infohashes: &[Infohash],
+    ) -> HashMap<Infohash, (i64, i64, i64)> {
+        self.recover_cooldown_trackers();
+        let active_trackers = self.active_trackers();
+        if active_trackers.is_empty() || infohashes.is_empty() {
+            return HashMap::new();
+        }
+
+        let mut results: HashMap<Infohash, (i64, i64, i64)> = HashMap::new();
+
+        for tracker_url in active_trackers.iter().take(3) {
+            if tracker_url.starts_with("http://") || tracker_url.starts_with("https://") {
+                if let Ok(stats) = self.http_scrape(tracker_url, infohashes).await {
+                    for (ih, (c, d, i)) in stats {
+                        results.entry(ih).or_insert((c, d, i));
+                    }
+                }
+            }
+        }
+
+        results
+    }
+
+    /// HTTP scrape 请求
+    async fn http_scrape(
+        &self,
+        tracker_url: &str,
+        infohashes: &[Infohash],
+    ) -> Result<HashMap<Infohash, (i64, i64, i64)>> {
+        let mut url = Url::parse(tracker_url)?;
+        let path = url.path().to_string();
+        if path.ends_with("/announce") {
+            url.set_path(&path.replace("/announce", "/scrape"));
+        } else if !path.ends_with("/scrape") {
+            url.set_path(&format!("{}/scrape", path.trim_end_matches('/')));
+        }
+
+        for ih in infohashes {
+            url.query_pairs_mut()
+                .append_pair("info_hash", &String::from_utf8_lossy(ih));
+        }
+
+        let response = self.client.get(url.as_str()).send().await?;
+        if !response.status().is_success() {
+            return Err(anyhow!("HTTP status: {}", response.status()));
+        }
+
+        let body = response.bytes().await?;
+        Self::parse_scrape_response(&body)
+    }
+
+    /// 解析 scrape 响应
+    fn parse_scrape_response(
+        body: &[u8],
+    ) -> Result<HashMap<Infohash, (i64, i64, i64)>> {
+        use serde_bencode::from_bytes;
+        use serde_bencode::value::Value as BencodeValue;
+
+        let value: BencodeValue = from_bytes(body)?;
+        let dict = match value {
+            BencodeValue::Dict(d) => d,
+            _ => return Err(anyhow!("invalid scrape response")),
+        };
+
+        let files = match dict.get(b"files".as_slice()) {
+            Some(BencodeValue::Dict(d)) => d,
+            _ => return Err(anyhow!("no files in scrape response")),
+        };
+
+        let mut results = HashMap::new();
+        for (key, value) in files {
+            if key.len() != 20 {
+                continue;
+            }
+            let mut ih = [0u8; 20];
+            ih.copy_from_slice(key);
+
+            let entry = match value {
+                BencodeValue::Dict(d) => d,
+                _ => continue,
+            };
+            let complete = entry
+                .get(b"complete".as_slice())
+                .and_then(|v| match v {
+                    BencodeValue::Int(i) => Some(*i),
+                    _ => None,
+                })
+                .unwrap_or(0);
+            let downloaded = entry
+                .get(b"downloaded".as_slice())
+                .and_then(|v| match v {
+                    BencodeValue::Int(i) => Some(*i),
+                    _ => None,
+                })
+                .unwrap_or(0);
+            let incomplete = entry
+                .get(b"incomplete".as_slice())
+                .and_then(|v| match v {
+                    BencodeValue::Int(i) => Some(*i),
+                    _ => None,
+                })
+                .unwrap_or(0);
+
+            results.insert(ih, (complete, downloaded, incomplete));
+        }
+
+        Ok(results)
+    }
 }
 
 #[async_trait]
