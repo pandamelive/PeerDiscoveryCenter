@@ -4,9 +4,8 @@
 //! 生命周期：启动自检 → 主控发现 → 节点注册 → WebSocket 连接 → 心跳循环 → 任务执行/回报 → 断线重连
 
 use crate::bootstrap::{hostname, platform_info, Bootstrap};
-use crate::config::PdcConfig;
+use PeerDiscoveryCenter::config::PdcConfig;
 use crate::history::HistoryWriter;
-use crate::protocol::*;
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -203,7 +202,7 @@ async fn register_node(runtime: &Arc<AgentRuntime>, master_url: &str) -> Result<
         arch,
         version: crate::VERSION.to_string(),
         agent_type: "pdc".to_string(),
-        serve_host: config.server.host.clone(),
+        serve_host: config.server.listen.clone(),
         serve_port: config.server.port,
         region: config.agent.region.clone(),
         capability_tags: config.capability_tags(),
@@ -249,7 +248,7 @@ async fn connect_and_run(
         "arch": arch,
         "version": crate::VERSION,
         "agent_type": "pdc",
-        "serve_host": config.server.host,
+        "serve_host": config.server.listen,
         "serve_port": config.server.port,
         "region": config.agent.region,
         "capability_tags": config.capability_tags(),
@@ -295,7 +294,7 @@ async fn connect_and_run(
 }
 
 /// 处理 WebSocket 消息
-async fn handle_ws_message(runtime: &Arc<AgentRuntime>, text: &str) -> Result<()> {
+async fn handle_ws_message(_runtime: &Arc<AgentRuntime>, text: &str) -> Result<()> {
     let msg: WsMessage = serde_json::from_str(text)?;
     match msg.msg_type.as_str() {
         "ping" => {

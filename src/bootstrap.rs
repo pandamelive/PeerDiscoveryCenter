@@ -80,7 +80,7 @@ pub struct Bootstrap {
     /// 节点标识
     pub identity: NodeIdentity,
     /// 配置（从文件加载或生成默认）
-    pub config: crate::config::PdcConfig,
+    pub config: PeerDiscoveryCenter::config::PdcConfig,
 }
 
 impl Bootstrap {
@@ -108,9 +108,9 @@ impl Bootstrap {
 
         // 加载或生成默认配置
         let config = if dirs.config_file.exists() {
-            crate::config::PdcConfig::load(&dirs.config_file)?
+            PeerDiscoveryCenter::config::PdcConfig::load(&dirs.config_file)?
         } else {
-            let default = crate::config::PdcConfig::default_config();
+            let default = PeerDiscoveryCenter::config::PdcConfig::default_config();
             default.save(&dirs.config_file)?;
             tracing::info!("生成默认配置文件: {}", dirs.config_file.display());
             default
