@@ -2,6 +2,8 @@
 //!
 //! 负责创建工作目录、生成 node-id、初始化配置模板。
 
+#![allow(dead_code)]
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};

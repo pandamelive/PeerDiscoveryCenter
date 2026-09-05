@@ -120,6 +120,7 @@ impl SuperTrackerState {
             complete,
             incomplete,
             peers,
+            external_ip: Some(req.remote_addr.ip()),
             failure_reason: None,
             warning_message: None,
         }

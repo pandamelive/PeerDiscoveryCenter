@@ -6,7 +6,7 @@
 //! - HTTP Tracker 协议类型（announce/scrape）
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
@@ -251,6 +251,8 @@ pub struct TrackerAnnounceResponse {
     pub incomplete: i64,
     /// Peer 列表
     pub peers: Vec<SocketAddr>,
+    /// 请求方的外部 IP（BEP 24）
+    pub external_ip: Option<IpAddr>,
     /// 错误信息（如果有）
     pub failure_reason: Option<String>,
     /// 警告信息
@@ -328,6 +330,36 @@ impl TrackerAnnounceResponse {
         out.extend_from_slice(compact.len().to_string().as_bytes());
         out.push(b':');
         out.extend_from_slice(&compact);
+
+        // peers6 (BEP 7: IPv6 peers, 每 18 字节：16字节IPv6 + 2字节端口)
+        let mut compact6 = Vec::new();
+        for peer in &self.peers {
+            if let std::net::IpAddr::V6(ipv6) = peer.ip() {
+                compact6.extend_from_slice(&ipv6.octets());
+                compact6.extend_from_slice(&peer.port().to_be_bytes());
+            }
+        }
+        if !compact6.is_empty() {
+            out.extend_from_slice(b"6:peers6");
+            out.extend_from_slice(compact6.len().to_string().as_bytes());
+            out.push(b':');
+            out.extend_from_slice(&compact6);
+        }
+
+        // external ip (BEP 24)
+        if let Some(ip) = self.external_ip {
+            out.extend_from_slice(b"11:external ip");
+            match ip {
+                std::net::IpAddr::V4(v4) => {
+                    out.extend_from_slice(b"4:");
+                    out.extend_from_slice(&v4.octets());
+                }
+                std::net::IpAddr::V6(v6) => {
+                    out.extend_from_slice(b"16:");
+                    out.extend_from_slice(&v6.octets());
+                }
+            }
+        }
 
         out.push(b'e');
         out
@@ -500,6 +532,7 @@ mod tests {
                 IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
                 6881,
             )],
+            external_ip: None,
             failure_reason: None,
             warning_message: None,
         };
@@ -521,6 +554,7 @@ mod tests {
             complete: 0,
             incomplete: 0,
             peers: vec![],
+            external_ip: None,
             failure_reason: Some("test error".to_string()),
             warning_message: None,
         };

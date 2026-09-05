@@ -6,6 +6,8 @@
 //! - SPDE 发现 PDC 服务，将 peer 发现任务委托给 PDC
 //! - PDC 发现其他 Agent，建立点对点连接
 
+#![allow(dead_code)]
+
 use anyhow::{Context, Result};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -59,20 +61,15 @@ struct FailureRecord {
 }
 
 /// 负载均衡策略
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LoadBalanceStrategy {
     /// 轮询
     RoundRobin,
     /// 随机
     Random,
     /// 最低负载优先
+    #[default]
     LeastLoad,
-}
-
-impl Default for LoadBalanceStrategy {
-    fn default() -> Self {
-        Self::LeastLoad
-    }
 }
 
 /// 服务解析器配置

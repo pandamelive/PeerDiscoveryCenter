@@ -3,8 +3,9 @@
 //! 接入 PK 主控，接受任务派发并回报结果。
 //! 生命周期：启动自检 → 主控发现 → 节点注册 → WebSocket 连接 → 心跳循环 → 任务执行/回报 → 断线重连
 
+#![allow(dead_code)]
+
 use crate::bootstrap::{hostname, platform_info, Bootstrap};
-use PeerDiscoveryCenter::config::PdcConfig;
 use crate::history::HistoryWriter;
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
@@ -15,6 +16,7 @@ use tokio::sync::RwLock;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
+use PeerDiscoveryCenter::config::PdcConfig;
 
 /// Agent 运行时状态
 pub struct AgentRuntime {

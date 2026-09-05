@@ -2,6 +2,8 @@
 //!
 //! 包含 PDC 特有的 API 请求/响应类型，复用 pandanetos 标准库的通用类型。
 
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;

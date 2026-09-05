@@ -23,6 +23,7 @@ pub enum QueryMethod {
     FindNode,
     GetPeers,
     AnnouncePeer,
+    SampleInfohashes,
 }
 
 impl QueryMethod {
@@ -32,6 +33,7 @@ impl QueryMethod {
             QueryMethod::FindNode => "find_node",
             QueryMethod::GetPeers => "get_peers",
             QueryMethod::AnnouncePeer => "announce_peer",
+            QueryMethod::SampleInfohashes => "sample_infohashes",
         }
     }
 }
@@ -70,6 +72,24 @@ impl DhtNode {
         }
         nodes
     }
+
+    /// 从 IPv6 compact node info 解析（每 38 字节：20B ID + 16B IP + 2B port）
+    pub fn parse_compact_nodes6(data: &[u8]) -> Vec<DhtNode> {
+        let mut nodes = vec![];
+        for chunk in data.chunks(38) {
+            if chunk.len() < 38 {
+                break;
+            }
+            let mut id = [0u8; 20];
+            id.copy_from_slice(&chunk[0..20]);
+            let mut ip_bytes = [0u8; 16];
+            ip_bytes.copy_from_slice(&chunk[20..36]);
+            let port = u16::from_be_bytes([chunk[36], chunk[37]]);
+            let addr = SocketAddr::new(IpAddr::V6(std::net::Ipv6Addr::from(ip_bytes)), port);
+            nodes.push(DhtNode { id, addr });
+        }
+        nodes
+    }
 }
 
 /// 解析 compact peers（每 6 字节：4字节IP + 2字节端口）
@@ -97,6 +117,21 @@ pub struct GetPeersResponse {
     pub values: Vec<SocketAddr>,
     /// 更近的节点列表（需要继续查询）
     pub nodes: Vec<DhtNode>,
+}
+
+/// announce_peer 请求参数
+#[derive(Debug, Clone)]
+pub struct AnnouncePeerParams {
+    /// 请求方节点 ID
+    pub id: [u8; 20],
+    /// infohash
+    pub info_hash: Infohash,
+    /// 监听端口
+    pub port: u16,
+    /// token（从 get_peers 响应中获取）
+    pub token: Vec<u8>,
+    /// 是否使用 implied_port（用请求源端口作为监听端口）
+    pub implied_port: bool,
 }
 
 /// DHT 消息编解码工具
@@ -182,6 +217,7 @@ impl DhtMessage {
             b"find_node" => QueryMethod::FindNode,
             b"get_peers" => QueryMethod::GetPeers,
             b"announce_peer" => QueryMethod::AnnouncePeer,
+            b"sample_infohashes" => QueryMethod::SampleInfohashes,
             _ => return None,
         };
 
@@ -198,6 +234,73 @@ impl DhtMessage {
         }
 
         Some((tid, method, infohash))
+    }
+
+    /// 解析 announce_peer 请求的完整参数
+    pub fn parse_announce_peer(data: &[u8]) -> Option<(Vec<u8>, AnnouncePeerParams)> {
+        let value: BencodeValue = from_bytes(data).ok()?;
+        let dict = value.as_dict()?;
+
+        let y = dict.get(b"y".as_slice())?.as_bytes()?;
+        if y != b"q" {
+            return None;
+        }
+
+        let q = dict.get(b"q".as_slice())?.as_bytes()?;
+        if q != b"announce_peer" {
+            return None;
+        }
+
+        let tid = dict
+            .get(b"t".as_slice())
+            .and_then(|v| v.as_bytes())
+            .cloned()
+            .unwrap_or_default();
+
+        let args = dict.get(b"a".as_slice()).and_then(|v| v.as_dict())?;
+
+        let mut id = [0u8; 20];
+        if let Some(id_bytes) = args.get(b"id".as_slice()).and_then(|v| v.as_bytes()) {
+            if id_bytes.len() == 20 {
+                id.copy_from_slice(id_bytes);
+            }
+        }
+
+        let mut info_hash = [0u8; 20];
+        if let Some(ih_bytes) = args.get(b"info_hash".as_slice()).and_then(|v| v.as_bytes()) {
+            if ih_bytes.len() == 20 {
+                info_hash.copy_from_slice(ih_bytes);
+            }
+        }
+
+        let port = args
+            .get(b"port".as_slice())
+            .and_then(|v| v.as_int())
+            .map(|p| p as u16)
+            .unwrap_or(0);
+
+        let token = args
+            .get(b"token".as_slice())
+            .and_then(|v| v.as_bytes())
+            .cloned()
+            .unwrap_or_default();
+
+        let implied_port = args
+            .get(b"implied_port".as_slice())
+            .and_then(|v| v.as_int())
+            .map(|v| v != 0)
+            .unwrap_or(false);
+
+        Some((
+            tid,
+            AnnouncePeerParams {
+                id,
+                info_hash,
+                port,
+                token,
+                implied_port,
+            },
+        ))
     }
 
     /// 构建 ping 响应
@@ -224,6 +327,49 @@ impl DhtMessage {
         buf
     }
 
+    /// 构建 find_node 响应（返回指定节点列表，同时包含 IPv4 和 IPv6）
+    pub fn build_find_node_response_with_nodes(
+        transaction_id: &[u8],
+        node_id: &[u8; 20],
+        nodes: &[DhtNode],
+    ) -> Vec<u8> {
+        // 分离 IPv4 和 IPv6 节点
+        let mut compact_v4 = Vec::with_capacity(nodes.len() * 26);
+        let mut compact_v6 = Vec::with_capacity(nodes.len() * 38);
+        for node in nodes {
+            match node.addr.ip() {
+                IpAddr::V4(ipv4) => {
+                    compact_v4.extend_from_slice(&node.id);
+                    compact_v4.extend_from_slice(&ipv4.octets());
+                    compact_v4.extend_from_slice(&node.addr.port().to_be_bytes());
+                }
+                IpAddr::V6(ipv6) => {
+                    compact_v6.extend_from_slice(&node.id);
+                    compact_v6.extend_from_slice(&ipv6.octets());
+                    compact_v6.extend_from_slice(&node.addr.port().to_be_bytes());
+                }
+            }
+        }
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"d1:rd2:id20:");
+        buf.extend_from_slice(node_id);
+        // IPv4 nodes
+        buf.extend_from_slice(b"5:nodes");
+        buf.extend_from_slice(format!("{}:", compact_v4.len()).as_bytes());
+        buf.extend_from_slice(&compact_v4);
+        // IPv6 nodes (BEP 32)
+        if !compact_v6.is_empty() {
+            buf.extend_from_slice(b"6:nodes6");
+            buf.extend_from_slice(format!("{}:", compact_v6.len()).as_bytes());
+            buf.extend_from_slice(&compact_v6);
+        }
+        buf.extend_from_slice(b"e1:t");
+        buf.extend_from_slice(format!("{}:", transaction_id.len()).as_bytes());
+        buf.extend_from_slice(transaction_id);
+        buf.extend_from_slice(b"1:y1:re");
+        buf
+    }
+
     /// 构建 get_peers 响应（返回空节点列表，无 peers）
     pub fn build_get_peers_response(
         transaction_id: &[u8],
@@ -240,6 +386,87 @@ impl DhtMessage {
         buf.extend_from_slice(format!("{}:", transaction_id.len()).as_bytes());
         buf.extend_from_slice(transaction_id);
         buf.extend_from_slice(b"1:y1:re");
+        buf
+    }
+
+    /// 构建 get_peers 响应（返回 peers + 节点列表）
+    ///
+    /// 如果 peers 非空，返回 `values`（peer 列表）；
+    /// 否则返回 `nodes`（更近的节点列表）。
+    pub fn build_get_peers_response_full(
+        transaction_id: &[u8],
+        node_id: &[u8; 20],
+        token: &[u8],
+        peers: &[SocketAddr],
+        nodes: &[DhtNode],
+    ) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"d1:rd2:id20:");
+        buf.extend_from_slice(node_id);
+
+        if !peers.is_empty() {
+            // 返回 values（peer 列表）
+            buf.extend_from_slice(b"6:valuesl");
+            for peer in peers {
+                if let IpAddr::V4(ipv4) = peer.ip() {
+                    let mut compact = [0u8; 6];
+                    compact[0..4].copy_from_slice(&ipv4.octets());
+                    compact[4..6].copy_from_slice(&peer.port().to_be_bytes());
+                    buf.extend_from_slice(b"6:");
+                    buf.extend_from_slice(&compact);
+                }
+            }
+            buf.extend_from_slice(b"e");
+        } else {
+            // 返回 nodes（更近的节点）
+            let mut compact = Vec::with_capacity(nodes.len() * 26);
+            for node in nodes {
+                compact.extend_from_slice(&node.id);
+                if let IpAddr::V4(ipv4) = node.addr.ip() {
+                    compact.extend_from_slice(&ipv4.octets());
+                    compact.extend_from_slice(&node.addr.port().to_be_bytes());
+                }
+            }
+            buf.extend_from_slice(b"5:nodes");
+            buf.extend_from_slice(format!("{}:", compact.len()).as_bytes());
+            buf.extend_from_slice(&compact);
+        }
+
+        // token
+        buf.extend_from_slice(b"5:token");
+        buf.extend_from_slice(format!("{}:", token.len()).as_bytes());
+        buf.extend_from_slice(token);
+        buf.extend_from_slice(b"e1:t");
+        buf.extend_from_slice(format!("{}:", transaction_id.len()).as_bytes());
+        buf.extend_from_slice(transaction_id);
+        buf.extend_from_slice(b"1:y1:re");
+        buf
+    }
+
+    /// 构建 announce_peer 响应
+    pub fn build_announce_peer_response(transaction_id: &[u8], node_id: &[u8; 20]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"d1:rd2:id20:");
+        buf.extend_from_slice(node_id);
+        buf.extend_from_slice(b"e1:t");
+        buf.extend_from_slice(format!("{}:", transaction_id.len()).as_bytes());
+        buf.extend_from_slice(transaction_id);
+        buf.extend_from_slice(b"1:y1:re");
+        buf
+    }
+
+    /// 构建 DHT 错误响应
+    pub fn build_error_response(transaction_id: &[u8], code: i64, message: &str) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"d1:eli");
+        buf.extend_from_slice(code.to_string().as_bytes());
+        buf.extend_from_slice(b"e");
+        buf.extend_from_slice(format!("{}:", message.len()).as_bytes());
+        buf.extend_from_slice(message.as_bytes());
+        buf.extend_from_slice(b"e1:t");
+        buf.extend_from_slice(format!("{}:", transaction_id.len()).as_bytes());
+        buf.extend_from_slice(transaction_id);
+        buf.extend_from_slice(b"1:y1:ee");
         buf
     }
 
@@ -273,6 +500,81 @@ impl DhtMessage {
         buf.extend_from_slice(transaction_id);
         buf.extend_from_slice(b"1:y1:qe");
         buf
+    }
+
+    /// 构建 BEP 33 sample_infohashes 请求
+    pub fn build_sample_infohashes(
+        transaction_id: &[u8],
+        node_id: &[u8; 20],
+        target_id: &[u8; 20],
+    ) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"d1:ad2:id20:");
+        buf.extend_from_slice(node_id);
+        buf.extend_from_slice(b"6:target20:");
+        buf.extend_from_slice(target_id);
+        buf.extend_from_slice(b"e1:q17:sample_infohashes1:t");
+        buf.extend_from_slice(format!("{}:", transaction_id.len()).as_bytes());
+        buf.extend_from_slice(transaction_id);
+        buf.extend_from_slice(b"1:y1:qe");
+        buf
+    }
+
+    /// 构建 BEP 33 sample_infohashes 响应
+    pub fn build_sample_infohashes_response(
+        transaction_id: &[u8],
+        node_id: &[u8; 20],
+        interval: i64,
+        num: i64,
+        samples: &[u8],
+    ) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"d1:rd2:id20:");
+        buf.extend_from_slice(node_id);
+        buf.extend_from_slice(b"8:intervali");
+        buf.extend_from_slice(interval.to_string().as_bytes());
+        buf.extend_from_slice(b"e3:numi");
+        buf.extend_from_slice(num.to_string().as_bytes());
+        buf.extend_from_slice(b"e7:samples");
+        buf.extend_from_slice(format!("{}:", samples.len()).as_bytes());
+        buf.extend_from_slice(samples);
+        buf.extend_from_slice(b"e1:t");
+        buf.extend_from_slice(format!("{}:", transaction_id.len()).as_bytes());
+        buf.extend_from_slice(transaction_id);
+        buf.extend_from_slice(b"1:y1:re");
+        buf
+    }
+
+    /// 解析 BEP 33 sample_infohashes 响应
+    pub fn parse_sample_infohashes_response(data: &[u8]) -> Option<(Vec<u8>, i64, i64, Vec<u8>)> {
+        let value: BencodeValue = from_bytes(data).ok()?;
+        let dict = value.as_dict()?;
+
+        let transaction_id = dict
+            .get(b"t".as_slice())
+            .and_then(|v| v.as_bytes())?
+            .to_vec();
+
+        let r = dict.get(b"r".as_slice()).and_then(|v| v.as_dict())?;
+
+        let interval = r
+            .get(b"interval".as_slice())
+            .and_then(|v| v.as_int())
+            .unwrap_or(30);
+
+        let num = r
+            .get(b"num".as_slice())
+            .and_then(|v| v.as_int())
+            .unwrap_or(0);
+
+        let samples = r
+            .get(b"samples".as_slice())
+            .and_then(|v| v.as_bytes())
+            .map(|b| b.to_vec())
+            .unwrap_or_default()
+            .to_vec();
+
+        Some((transaction_id, interval, num, samples))
     }
 
     /// 解析 get_peers 响应
@@ -354,11 +656,20 @@ impl DhtMessage {
         }
 
         let r = dict.get(b"r".as_slice())?.as_dict()?;
-        let nodes = r
+        let mut nodes = r
             .get(b"nodes".as_slice())
             .and_then(|v| v.as_bytes())
             .map(|b| DhtNode::parse_compact_nodes(b))
             .unwrap_or_default();
+
+        // BEP 32: 解析 IPv6 nodes6
+        let nodes6 = r
+            .get(b"nodes6".as_slice())
+            .and_then(|v| v.as_bytes())
+            .map(|b| DhtNode::parse_compact_nodes6(b))
+            .unwrap_or_default();
+
+        nodes.extend(nodes6);
 
         Some((tid, nodes))
     }

@@ -13,6 +13,10 @@ mod history;
 mod protocol;
 mod service_resolver;
 
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -118,7 +122,10 @@ async fn run_serve(
     info!("========================================");
     info!(
         "[serve] 配置: 监听 {}:{}, 超级Tracker={}, 爬虫={}",
-        config.server.listen, config.server.port, config.super_tracker.enabled, config.crawler.enabled
+        config.server.listen,
+        config.server.port,
+        config.super_tracker.enabled,
+        config.crawler.enabled
     );
 
     // 创建核心组件
@@ -136,7 +143,10 @@ async fn run_serve(
     let super_tracker = Arc::new(SuperTrackerState::new(config.super_tracker.clone()));
 
     // NAT / UPnP
-    let nat = Arc::new(NatManager::new(config.nat.enabled, config.nat.lease_duration));
+    let nat = Arc::new(NatManager::new(
+        config.nat.enabled,
+        config.nat.lease_duration,
+    ));
     let udp_port = config.super_tracker.udp_port.unwrap_or(config.server.port);
     let crawler_port = if config.crawler.enabled {
         config.crawler.listen_port
@@ -164,10 +174,16 @@ async fn run_serve(
     // 健康检查任务
     let hc_config = HealthCheckConfig {
         interval: Duration::from_secs(config.health_check.interval_secs),
-        cache_cleanup_interval: Duration::from_secs(config.health_check.cache_cleanup_interval_secs),
+        cache_cleanup_interval: Duration::from_secs(
+            config.health_check.cache_cleanup_interval_secs,
+        ),
         stats_output_interval: Duration::from_secs(config.health_check.stats_output_interval_secs),
     };
-    let health_check = Arc::new(HealthCheckTask::new(registry.clone(), cache.clone(), hc_config));
+    let health_check = Arc::new(HealthCheckTask::new(
+        registry.clone(),
+        cache.clone(),
+        hc_config,
+    ));
     tokio::spawn(async move {
         health_check.run().await;
     });
@@ -198,7 +214,10 @@ async fn run_serve(
     }
 
     // HTTP 服务（阻塞）
-    info!("[serve] HTTP 服务: http://{}:{}", config.server.listen, config.server.port);
+    info!(
+        "[serve] HTTP 服务: http://{}:{}",
+        config.server.listen, config.server.port
+    );
     DataPlane::serve(app_state).await?;
 
     Ok(())
@@ -239,7 +258,9 @@ async fn run_discover(
         ));
     }
     let bytes = hex::decode(infohash_str)?;
-    let infohash: Infohash = bytes.try_into().map_err(|_| anyhow::anyhow!("infohash 转换失败"))?;
+    let infohash: Infohash = bytes
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("infohash 转换失败"))?;
 
     info!("[discover] infohash={}, limit={}", infohash_str, limit);
 
@@ -304,7 +325,11 @@ async fn run_discover(
             println!("  耗时: {}ms", result.total_duration.as_millis()); // panda-allow: cli-output
             println!("  来源统计: {:?}", source_stats); // panda-allow: cli-output
             for p in &result.peers {
-                println!("    {} (source={:?}, score={})", p.addr, p.source, p.priority_score); // panda-allow: cli-output
+                let line = format!(
+                    "    {} (source={:?}, score={})",
+                    p.addr, p.source, p.priority_score
+                );
+                println!("{}", line); // panda-allow: cli-output
             }
         }
     }
@@ -330,10 +355,15 @@ async fn run_peers(
                 continue;
             }
         }
-        println!( // panda-allow: cli-output
+        let line = format!(
             "  [{}] infohash={}, peers={}, duration={}ms, success={}",
-            record.timestamp, record.infohash, record.peers_count, record.duration_ms, record.success
+            record.timestamp,
+            record.infohash,
+            record.peers_count,
+            record.duration_ms,
+            record.success
         );
+        println!("{}", line); // panda-allow: cli-output
     }
 
     Ok(())
@@ -357,10 +387,12 @@ async fn run_stats(work_dir: &std::path::Path) -> anyhow::Result<()> {
 
     println!("PDC 统计信息:"); // panda-allow: cli-output
     println!("  历史记录总数: {}", total); // panda-allow: cli-output
-    println!( // panda-allow: cli-output
-        "  最近 100 次成功率: {:.1}%",
-        if recent.is_empty() { 0.0 } else { success_count as f64 / recent.len() as f64 * 100.0 }
-    );
+    let success_rate = if recent.is_empty() {
+        0.0
+    } else {
+        success_count as f64 / recent.len() as f64 * 100.0
+    };
+    println!("  最近 100 次成功率: {:.1}%", success_rate); // panda-allow: cli-output
     println!("  最近 100 次平均耗时: {:.1}ms", avg_duration); // panda-allow: cli-output
     println!("  最近 100 次总发现 peer 数: {}", total_peers); // panda-allow: cli-output
 
@@ -377,14 +409,14 @@ async fn run_health(work_dir: &std::path::Path) -> anyhow::Result<()> {
     println!("  节点 ID: {}", boot.identity.node_id); // panda-allow: cli-output
     println!("  配置文件: {}", boot.dirs.config_file.display()); // panda-allow: cli-output
     println!("  历史文件: {}", boot.dirs.history_file.display()); // panda-allow: cli-output
-    println!( // panda-allow: cli-output
-        "  serve 监听: {}:{}",
-        boot.config.server.listen, boot.config.server.port
-    );
-    println!( // panda-allow: cli-output
-        "  agent 模式: {}",
-        if boot.config.agent.enabled { "enabled" } else { "disabled" }
-    );
+    let serve_addr = format!("{}:{}", boot.config.server.listen, boot.config.server.port);
+    println!("  serve 监听: {}", serve_addr); // panda-allow: cli-output
+    let agent_status = if boot.config.agent.enabled {
+        "enabled"
+    } else {
+        "disabled"
+    };
+    println!("  agent 模式: {}", agent_status); // panda-allow: cli-output
 
     Ok(())
 }

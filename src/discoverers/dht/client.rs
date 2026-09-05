@@ -3,12 +3,16 @@
 //! 实现 BitTorrent DHT 协议（BEP 5），通过 Kademlia 分布式哈希表发现 peer。
 //!
 //! 实现了：
+//! - k-bucket 路由表（160桶，k=20，支持桶分裂）
+//! - BEP 42 DHT 安全（node ID IP 约束，防 sybil）
 //! - Bootstrap 节点启动和路由表维护
 //! - get_peers 递归查询（迭代式 Kademlia 查找）
 //! - compact node info / compact peer 解析
 //! - 节点健康检查和过期清理
+//! - Token 验证（announce_peer 合法性校验）
+//! - DHT Peer 存储层（announce_peer 上报的 peer）
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -24,6 +28,9 @@ use crate::traits::{AnnounceEvent, DiscovererStats, DiscovererType, PeerDiscover
 use crate::types::{Infohash, PeerInfo, PeerSource};
 
 use super::message::{DhtMessage, DhtNode};
+use super::routing_table::{verify_node_id, CompactAddr, RoutingTable};
+use super::store::DhtStore;
+use super::token::TokenManager;
 
 /// DHT 配置
 #[derive(Debug, Clone)]
@@ -32,8 +39,8 @@ pub struct DhtConfig {
     pub bootstrap_nodes: Vec<(String, u16)>,
     /// 监听端口
     pub listen_port: u16,
-    /// 节点 ID（20 字节）
-    pub node_id: [u8; 20],
+    /// 节点 ID（20 字节），如果为 None 则自动生成（BEP 42）
+    pub node_id: Option<[u8; 20]>,
     /// 路由表持久化路径
     pub persistence_path: Option<String>,
     /// 路由表刷新间隔
@@ -48,23 +55,21 @@ pub struct DhtConfig {
     pub max_query_rounds: usize,
     /// 是否启用
     pub enabled: bool,
+    /// 是否启用 BEP 42 DHT 安全（node ID IP 约束）
+    pub enable_bep42: bool,
+    /// 单个 infohash 最多存储的 peer 数
+    pub max_peers_per_infohash: usize,
 }
 
 impl Default for DhtConfig {
     fn default() -> Self {
-        let mut node_id = [0u8; 20];
-        let mut rng = rand::thread_rng();
-        for byte in node_id.iter_mut() {
-            *byte = rng.gen();
-        }
-
         Self {
             bootstrap_nodes: crate::discoverers::dht::DHT_BOOTSTRAP_NODES
                 .iter()
                 .map(|(host, port)| (host.to_string(), *port))
                 .collect(),
             listen_port: 6881,
-            node_id,
+            node_id: None,
             persistence_path: None,
             refresh_interval: Duration::from_secs(300),
             node_ttl: Duration::from_secs(3600),
@@ -72,24 +77,9 @@ impl Default for DhtConfig {
             max_concurrent_requests: 3,
             max_query_rounds: 5,
             enabled: true,
+            enable_bep42: true,
+            max_peers_per_infohash: 256,
         }
-    }
-}
-
-/// 路由表中的节点
-#[derive(Debug, Clone)]
-struct RoutingNode {
-    id: [u8; 20],
-    addr: SocketAddr,
-    last_active: Instant,
-    consecutive_failures: u32,
-    #[allow(dead_code)]
-    is_bootstrap: bool,
-}
-
-impl RoutingNode {
-    fn is_healthy(&self) -> bool {
-        self.consecutive_failures < 3
     }
 }
 
@@ -103,8 +93,14 @@ struct QueryResult {
 /// DHT 发现器
 pub struct DhtDiscoverer {
     config: DhtConfig,
-    /// 路由表（addr -> RoutingNode）
-    routing_table: Arc<RwLock<HashMap<SocketAddr, RoutingNode>>>,
+    /// 实际使用的 node ID
+    node_id: [u8; 20],
+    /// k-bucket 路由表
+    routing_table: Arc<RwLock<RoutingTable>>,
+    /// DHT Peer 存储层
+    peer_store: Arc<RwLock<DhtStore>>,
+    /// Token 管理器
+    token_manager: Arc<RwLock<TokenManager>>,
     /// 统计
     stats: Arc<RwLock<DiscovererStats>>,
     /// 是否已初始化
@@ -114,9 +110,26 @@ pub struct DhtDiscoverer {
 impl DhtDiscoverer {
     /// 创建新的 DHT 发现器
     pub fn new(config: DhtConfig) -> Self {
+        let node_id = config.node_id.unwrap_or_else(|| {
+            if config.enable_bep42 {
+                // BEP 42: 用一个占位 IP 生成（实际使用时会根据外网 IP 调整）
+                // 这里先用随机 ID，bootstrap 后可以根据实际外网 IP 重新生成
+                let mut id = [0u8; 20];
+                rand::thread_rng().fill(&mut id);
+                id
+            } else {
+                let mut id = [0u8; 20];
+                rand::thread_rng().fill(&mut id);
+                id
+            }
+        });
+
         Self {
             config,
-            routing_table: Arc::new(RwLock::new(HashMap::new())),
+            node_id,
+            routing_table: Arc::new(RwLock::new(RoutingTable::new(node_id))),
+            peer_store: Arc::new(RwLock::new(DhtStore::new())),
+            token_manager: Arc::new(RwLock::new(TokenManager::new())),
             stats: Arc::new(RwLock::new(DiscovererStats::default())),
             initialized: Arc::new(RwLock::new(false)),
         }
@@ -125,6 +138,26 @@ impl DhtDiscoverer {
     /// 创建默认配置的 DHT 发现器
     pub fn with_default_config() -> Self {
         Self::new(DhtConfig::default())
+    }
+
+    /// 获取 node ID
+    pub fn node_id(&self) -> &[u8; 20] {
+        &self.node_id
+    }
+
+    /// 获取路由表引用（用于爬虫等共享场景）
+    pub fn routing_table(&self) -> Arc<RwLock<RoutingTable>> {
+        self.routing_table.clone()
+    }
+
+    /// 获取 peer 存储引用
+    pub fn peer_store(&self) -> Arc<RwLock<DhtStore>> {
+        self.peer_store.clone()
+    }
+
+    /// 获取 token 管理器引用
+    pub fn token_manager(&self) -> Arc<RwLock<TokenManager>> {
+        self.token_manager.clone()
     }
 
     /// 初始化 DHT 节点（解析 bootstrap 节点并加入路由表）
@@ -150,18 +183,10 @@ impl DhtDiscoverer {
         {
             let mut table = self.routing_table.write();
             for addr in resolved {
+                // bootstrap 节点的 ID 未知，用随机 ID（后续响应会更新）
                 let mut node_id = [0u8; 20];
                 rand::thread_rng().fill(&mut node_id);
-                table.insert(
-                    addr,
-                    RoutingNode {
-                        id: node_id,
-                        addr,
-                        last_active: Instant::now(),
-                        consecutive_failures: 0,
-                        is_bootstrap: true,
-                    },
-                );
+                table.insert(node_id, CompactAddr::from_socket(&addr));
             }
         }
 
@@ -170,63 +195,57 @@ impl DhtDiscoverer {
             "[dht] DHT 初始化完成，路由表 {} 个节点",
             self.routing_table.read().len()
         );
-
         Ok(())
     }
 
     /// 获取健康的节点列表
-    fn healthy_nodes(&self) -> Vec<RoutingNode> {
+    fn healthy_nodes(&self) -> Vec<CompactAddr> {
         self.routing_table
             .read()
-            .values()
-            .filter(|n| n.is_healthy())
-            .cloned()
+            .healthy_nodes()
+            .into_iter()
+            .map(|e| e.addr)
             .collect()
     }
 
     /// 获取距离目标最近的 N 个节点
-    fn nearest_nodes(&self, target: &[u8; 20], count: usize) -> Vec<RoutingNode> {
-        let mut nodes: Vec<RoutingNode> = self.healthy_nodes();
-        nodes.sort_by(|a, b| {
-            let da = DhtMessage::xor_distance(&a.id, target);
-            let db = DhtMessage::xor_distance(&b.id, target);
-            if DhtMessage::distance_less(&da, &db) {
-                std::cmp::Ordering::Less
-            } else {
-                std::cmp::Ordering::Greater
-            }
-        });
-        nodes.truncate(count);
-        nodes
+    fn nearest_nodes(&self, target: &[u8; 20], count: usize) -> Vec<(CompactAddr, [u8; 20])> {
+        self.routing_table
+            .read()
+            .find_closest(target, count)
+            .into_iter()
+            .map(|e| (e.addr, e.id))
+            .collect()
     }
 
     /// 添加节点到路由表
     fn add_node(&self, node: &DhtNode) {
-        let mut table = self.routing_table.write();
-        if table.len() < 1000 {
-            table.entry(node.addr).or_insert(RoutingNode {
-                id: node.id,
-                addr: node.addr,
-                last_active: Instant::now(),
-                consecutive_failures: 0,
-                is_bootstrap: false,
-            });
+        let compact = CompactAddr::from_socket(&node.addr);
+        // BEP 42 验证（如果启用）
+        if self.config.enable_bep42 && !verify_node_id(&node.id, &compact) {
+            debug!(
+                "[dht] BEP 42 验证失败，拒绝节点 {} (id={})",
+                node.addr,
+                hex::encode(&node.id[..4])
+            );
+            return;
         }
+        self.routing_table.write().insert(node.id, compact);
     }
 
     /// 标记节点失败
     fn mark_node_failure(&self, addr: &SocketAddr) {
-        if let Some(node) = self.routing_table.write().get_mut(addr) {
-            node.consecutive_failures += 1;
-        }
+        let compact = CompactAddr::from_socket(addr);
+        self.routing_table.write().mark_failed(&compact);
     }
 
     /// 标记节点成功
     fn mark_node_success(&self, addr: &SocketAddr, id: [u8; 20]) {
-        if let Some(node) = self.routing_table.write().get_mut(addr) {
-            node.id = id;
-            node.last_active = Instant::now();
-            node.consecutive_failures = 0;
+        let compact = CompactAddr::from_socket(addr);
+        let mut table = self.routing_table.write();
+        if !table.touch(&compact) {
+            // 节点不在路由表中，插入
+            table.insert(id, compact);
         }
     }
 
@@ -240,7 +259,6 @@ impl DhtDiscoverer {
     ) -> Result<QueryResult> {
         let tid = rand::thread_rng().gen::<[u8; 2]>();
         let request = DhtMessage::build_get_peers(&tid, our_id, info_hash);
-
         socket.send_to(&request, node_addr).await?;
 
         let mut buf = vec![0u8; 4096];
@@ -271,6 +289,19 @@ impl DhtDiscoverer {
             stats.record_failure();
         }
     }
+
+    /// 定期清理过期节点和 peer（应在后台任务中调用）
+    pub fn maintenance(&self) {
+        let evicted_nodes = self.routing_table.write().evict_expired();
+        let evicted_peers = self.peer_store.write().evict_expired();
+        self.token_manager.write().maybe_rotate();
+        if evicted_nodes > 0 || evicted_peers > 0 {
+            debug!(
+                "[dht] 维护: 清理 {} 个节点, {} 个 peer",
+                evicted_nodes, evicted_peers
+            );
+        }
+    }
 }
 
 #[async_trait]
@@ -293,10 +324,9 @@ impl PeerDiscoverer for DhtDiscoverer {
         limit: usize,
     ) -> anyhow::Result<Vec<PeerInfo>> {
         self.init().await?;
-
         let start = Instant::now();
-        let socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
 
+        let socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
         let mut all_peers: HashSet<SocketAddr> = HashSet::new();
         let mut queried: HashSet<SocketAddr> = HashSet::new();
         let mut closest_distance = [0xFFu8; 20];
@@ -306,9 +336,9 @@ impl PeerDiscoverer for DhtDiscoverer {
         for round in 0..self.config.max_query_rounds {
             // 获取最近的未查询节点
             let candidates = self.nearest_nodes(infohash, 20);
-            let to_query: Vec<RoutingNode> = candidates
+            let to_query: Vec<(CompactAddr, [u8; 20])> = candidates
                 .into_iter()
-                .filter(|n| !queried.contains(&n.addr))
+                .filter(|(addr, _)| !queried.contains(&addr.to_socket()))
                 .take(self.config.max_concurrent_requests)
                 .collect();
 
@@ -318,8 +348,8 @@ impl PeerDiscoverer for DhtDiscoverer {
             }
 
             // 检查是否有更近的节点
-            let nearest = &to_query[0];
-            let dist = DhtMessage::xor_distance(&nearest.id, infohash);
+            let (nearest_addr, nearest_id) = &to_query[0];
+            let dist = DhtMessage::xor_distance(nearest_id, infohash);
             if DhtMessage::distance_less(&dist, &closest_distance) {
                 closest_distance = dist;
                 rounds_without_improvement = 0;
@@ -338,19 +368,18 @@ impl PeerDiscoverer for DhtDiscoverer {
                 "[dht] 第 {} 轮：查询 {} 个节点（最近: {}）",
                 round,
                 to_query.len(),
-                to_query[0].addr
+                nearest_addr.to_socket()
             );
 
             // 并发查询
             let mut tasks = vec![];
-            for node in &to_query {
-                queried.insert(node.addr);
+            for (compact_addr, _) in &to_query {
+                let node_addr = compact_addr.to_socket();
+                queried.insert(node_addr);
                 let socket = socket.clone();
-                let node_addr = node.addr;
-                let our_id = self.config.node_id;
+                let our_id = self.node_id;
                 let infohash = *infohash;
                 let timeout = self.config.request_timeout;
-
                 tasks.push(tokio::spawn(async move {
                     let result =
                         DhtDiscoverer::query_node(&socket, node_addr, &our_id, &infohash, timeout)
@@ -413,13 +442,11 @@ impl PeerDiscoverer for DhtDiscoverer {
             .collect();
 
         self.record_result(true, peers.len(), start.elapsed());
-
         info!(
             "[dht] 发现完成: {} 个 peer (耗时 {:?})",
             peers.len(),
             start.elapsed()
         );
-
         Ok(peers)
     }
 
@@ -442,7 +469,6 @@ impl PeerDiscoverer for DhtDiscoverer {
         }
 
         self.init().await?;
-
         let socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
 
         // 获取最近的 5 个节点
@@ -454,20 +480,18 @@ impl PeerDiscoverer for DhtDiscoverer {
 
         // 并发发送 get_peers 获取 token
         let mut tasks = vec![];
-        for node in &nodes {
+        for (compact_addr, _) in &nodes {
+            let node_addr = compact_addr.to_socket();
             let socket = socket.clone();
-            let node_addr = node.addr;
-            let our_id = self.config.node_id;
+            let our_id = self.node_id;
             let infohash = *infohash;
             let timeout = self.config.request_timeout;
-
             tasks.push(tokio::spawn(async move {
                 let tid = rand::thread_rng().gen::<[u8; 2]>();
                 let request = DhtMessage::build_get_peers(&tid, &our_id, &infohash);
                 if socket.send_to(&request, node_addr).await.is_err() {
                     return None;
                 }
-
                 let mut buf = vec![0u8; 4096];
                 match tokio::time::timeout(timeout, socket.recv_from(&mut buf)).await {
                     Ok(Ok((n, _))) => {
@@ -486,13 +510,8 @@ impl PeerDiscoverer for DhtDiscoverer {
             if let Ok(Some((node_addr, token))) = task.await {
                 // 发送 announce_peer（fire and forget）
                 let tid = rand::thread_rng().gen::<[u8; 2]>();
-                let announce_msg = DhtMessage::build_announce_peer(
-                    &tid,
-                    &self.config.node_id,
-                    infohash,
-                    port,
-                    &token,
-                );
+                let announce_msg =
+                    DhtMessage::build_announce_peer(&tid, &self.node_id, infohash, port, &token);
                 if socket.send_to(&announce_msg, node_addr).await.is_ok() {
                     announced_count += 1;
                     debug!("[dht] 向 {} announce_peer 成功", node_addr);
@@ -505,7 +524,6 @@ impl PeerDiscoverer for DhtDiscoverer {
             announced_count,
             nodes.len()
         );
-
         Ok(())
     }
 
@@ -526,6 +544,7 @@ impl PeerDiscoverer for DhtDiscoverer {
 
 #[cfg(test)]
 mod tests {
+    use super::super::routing_table::generate_node_id;
     use super::*;
 
     #[test]
@@ -534,6 +553,7 @@ mod tests {
         assert!(!config.bootstrap_nodes.is_empty());
         assert_eq!(config.listen_port, 6881);
         assert_eq!(config.max_concurrent_requests, 3);
+        assert!(config.enable_bep42);
     }
 
     #[tokio::test]
@@ -549,7 +569,7 @@ mod tests {
         let result = discoverer.init().await;
         assert!(result.is_ok());
         assert!(*discoverer.initialized.read());
-        assert!(discoverer.routing_table.read().len() > 0);
+        assert!(!discoverer.routing_table.read().is_empty());
     }
 
     #[test]
@@ -560,27 +580,14 @@ mod tests {
             for i in 0..10u8 {
                 let mut id = [0u8; 20];
                 id[0] = i;
-                let addr = SocketAddr::new(
-                    std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)),
-                    6881 + i as u16,
-                );
-                table.insert(
-                    addr,
-                    RoutingNode {
-                        id,
-                        addr,
-                        last_active: Instant::now(),
-                        consecutive_failures: 0,
-                        is_bootstrap: false,
-                    },
-                );
+                let addr = CompactAddr::V4([127, 0, 0, i, 0x1A, (0xE1 + i)]);
+                table.insert(id, addr);
             }
         }
-
         let target = [0u8; 20];
         let nearest = discoverer.nearest_nodes(&target, 3);
         assert_eq!(nearest.len(), 3);
-        assert_eq!(nearest[0].id[0], 0);
+        assert_eq!(nearest[0].1[0], 0);
     }
 
     #[test]
@@ -590,12 +597,28 @@ mod tests {
             std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)),
             6881,
         );
+        // 用 BEP 42 生成合法 ID
+        let id = generate_node_id(addr.ip());
+        let node = DhtNode { id, addr };
+        discoverer.add_node(&node);
+        assert_eq!(discoverer.routing_table.read().len(), 1);
+    }
+
+    #[test]
+    fn test_add_node_bep42_reject() {
+        let discoverer = DhtDiscoverer::with_default_config();
+        let addr = SocketAddr::new(
+            std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)),
+            6881,
+        );
+        // 用不匹配的 ID（全零，不符合 BEP 42）
         let node = DhtNode {
-            id: [1u8; 20],
+            id: [0u8; 20],
             addr,
         };
         discoverer.add_node(&node);
-        assert_eq!(discoverer.routing_table.read().len(), 1);
+        // BEP 42 启用时应该被拒绝
+        assert_eq!(discoverer.routing_table.read().len(), 0);
     }
 
     #[test]
@@ -607,21 +630,38 @@ mod tests {
         );
         {
             let mut table = discoverer.routing_table.write();
-            table.insert(
-                addr,
-                RoutingNode {
-                    id: [0u8; 20],
-                    addr,
-                    last_active: Instant::now(),
-                    consecutive_failures: 0,
-                    is_bootstrap: false,
-                },
-            );
+            table.insert([0u8; 20], CompactAddr::from_socket(&addr));
         }
         for _ in 0..3 {
             discoverer.mark_node_failure(&addr);
         }
         let nodes = discoverer.healthy_nodes();
         assert!(nodes.is_empty()); // 连续失败 3 次后不健康
+    }
+
+    #[test]
+    fn test_maintenance() {
+        let discoverer = DhtDiscoverer::with_default_config();
+        // 不应 panic
+        discoverer.maintenance();
+    }
+
+    #[test]
+    fn test_peer_store_integration() {
+        let discoverer = DhtDiscoverer::with_default_config();
+        let ih = [1u8; 20];
+        let addr = CompactAddr::V4([127, 0, 0, 1, 0x1A, 0xE1]);
+
+        discoverer.peer_store.write().announce(ih, addr);
+        assert_eq!(discoverer.peer_store.read().peer_count(&ih), 1);
+    }
+
+    #[test]
+    fn test_token_manager_integration() {
+        let discoverer = DhtDiscoverer::with_default_config();
+        let addr = CompactAddr::V4([127, 0, 0, 1, 0x1A, 0xE1]);
+
+        let token = discoverer.token_manager.read().generate(&addr);
+        assert!(discoverer.token_manager.read().verify(&addr, &token));
     }
 }
