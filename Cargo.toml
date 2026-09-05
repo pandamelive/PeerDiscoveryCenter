@@ -26,7 +26,7 @@ thiserror = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 reqwest = { version = "0.12", features = ["json"] }
-axum = { version = "0.7", features = ["ws"] }
+axum = { version = "0.7", features = ["ws", "json", "macros"] }
 tower = "0.4"
 tower-http = { version = "0.5", features = ["cors", "trace"] }
 url = "2"
@@ -37,7 +37,11 @@ chrono = { version = "0.4", features = ["serde"] }
 dashmap = "5"
 parking_lot = "0.12"
 futures = "0.3"
+futures-util = "0.3"
 igd = "0.12"
+clap = { version = "4", features = ["derive"] }
+tokio-tungstenite = "0.21"
+uuid = { version = "1", features = ["v4", "serde"] }
 jemallocator = "0.5"
 socket2 = "0.5"
 prometheus = "0.13"

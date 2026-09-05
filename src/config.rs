@@ -3,7 +3,7 @@
 //! 支持从 config.yaml 加载配置，也支持环境变量覆盖。
 //! 配置结构按模块组织：server、super_tracker、discoverers、cache、health_check、crawler。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -32,6 +32,12 @@ pub struct PdcConfig {
     /// NAT 穿透配置
     #[serde(default)]
     pub nat: NatConfig,
+    /// Agent 模式配置
+    #[serde(default)]
+    pub agent: AgentConfig,
+    /// 主控连接配置
+    #[serde(default)]
+    pub controller: ControllerConfig,
     /// 日志级别
     #[serde(default = "default_log_level")]
     pub log_level: String,
@@ -51,6 +57,8 @@ impl Default for PdcConfig {
             health_check: HealthCheckConfig::default(),
             crawler: CrawlerConfig::default(),
             nat: NatConfig::default(),
+            agent: AgentConfig::default(),
+            controller: ControllerConfig::default(),
             log_level: default_log_level(),
         }
     }
@@ -62,6 +70,11 @@ impl PdcConfig {
         let content = std::fs::read_to_string(path)?;
         let config: PdcConfig = serde_yaml::from_str(&content)?;
         Ok(config)
+    }
+
+    /// 从 YAML 文件加载配置（load 是 from_file 的别名）
+    pub fn load(path: &Path) -> anyhow::Result<Self> {
+        Self::from_file(path)
     }
 
     /// 从 YAML 字符串加载配置
@@ -91,6 +104,47 @@ impl PdcConfig {
     /// 序列化为 YAML（用于保存配置）
     pub fn to_yaml(&self) -> anyhow::Result<String> {
         Ok(serde_yaml::to_string(self)?)
+    }
+
+    /// 保存配置到 YAML 文件
+    pub fn save(&self, path: &Path) -> anyhow::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let yaml = serde_yaml::to_string(self)?;
+        std::fs::write(path, yaml)?;
+        Ok(())
+    }
+
+    /// 生成默认配置（与 Default::default() 等价，便于 binary 调用）
+    pub fn default_config() -> Self {
+        Self::default()
+    }
+
+    /// 获取能力标识列表（用于 agent 注册时上报能力）
+    pub fn capability_tags(&self) -> Vec<String> {
+        let mut caps = Vec::new();
+        if self.discoverers.enable_tracker {
+            caps.push("tracker".to_string());
+        }
+        if self.discoverers.enable_dht {
+            caps.push("dht".to_string());
+        }
+        if self.discoverers.enable_pex {
+            caps.push("pex".to_string());
+        }
+        if self.discoverers.enable_lpd {
+            caps.push("lpd".to_string());
+        }
+        if self.discoverers.enable_webseed {
+            caps.push("webseed".to_string());
+        }
+        caps.push("cache".to_string());
+        caps.push("announce".to_string());
+        caps.push("priority_sorting".to_string());
+        caps.push("dedup".to_string());
+        caps.push("health_check".to_string());
+        caps
     }
 }
 
@@ -395,6 +449,97 @@ impl Default for NatConfig {
             lease_duration: default_nat_lease(),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Agent 模式配置
+// ---------------------------------------------------------------------------
+
+/// Agent 模式配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentConfig {
+    /// 是否启用 Agent 模式
+    #[serde(default)]
+    pub enabled: bool,
+    /// 节点名称（默认使用 hostname）
+    #[serde(default)]
+    pub name: Option<String>,
+    /// 区域/机房标识
+    #[serde(default)]
+    pub region: Option<String>,
+    /// 心跳间隔（秒）
+    #[serde(default = "default_heartbeat_interval")]
+    pub heartbeat_interval_secs: u64,
+    /// WebSocket 断线重连间隔（秒）
+    #[serde(default = "default_reconnect_interval")]
+    pub reconnect_interval_secs: u64,
+    /// 局域网自动发现扫描端口列表
+    #[serde(default = "default_scan_ports")]
+    pub scan_ports: Vec<u16>,
+}
+
+fn default_heartbeat_interval() -> u64 {
+    5
+}
+fn default_reconnect_interval() -> u64 {
+    3
+}
+fn default_scan_ports() -> Vec<u16> {
+    vec![5566, 8080, 80, 8000, 3000]
+}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            name: None,
+            region: None,
+            heartbeat_interval_secs: default_heartbeat_interval(),
+            reconnect_interval_secs: default_reconnect_interval(),
+            scan_ports: default_scan_ports(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 主控连接配置
+// ---------------------------------------------------------------------------
+
+/// 主控连接配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ControllerConfig {
+    /// 主控地址（如 http://127.0.0.1:5566）
+    #[serde(default)]
+    pub master: Option<String>,
+    /// 认证 Token
+    #[serde(default)]
+    pub token: Option<String>,
+    /// 是否自动发现局域网内的主控
+    #[serde(default = "default_true")]
+    pub auto_discover_master: bool,
+}
+
+impl Default for ControllerConfig {
+    fn default() -> Self {
+        Self {
+            master: None,
+            token: None,
+            auto_discover_master: default_true(),
+        }
+    }
+}
+
+/// 解析工作目录
+pub fn resolve_work_dir(explicit: Option<&str>) -> PathBuf {
+    if let Some(dir) = explicit {
+        return PathBuf::from(dir);
+    }
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(parent) = exe_path.parent() {
+            return parent.join("pdc-node");
+        }
+    }
+    PathBuf::from("pdc-node")
 }
 
 fn default_crawl_interval() -> u64 {
